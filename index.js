@@ -13,6 +13,7 @@ const db = admin.firestore();
 console.log("🚀 Serveur de notifications Kwetu démarré...");
 
 // Fonction d'envoi vers Expo
+// Remplacez la fonction sendPushNotification dans votre index.js sur GitHub :
 async function sendPushNotification(expoPushToken, title, body, data = {}) {
   if (!expoPushToken) return;
   try {
@@ -21,7 +22,9 @@ async function sendPushNotification(expoPushToken, title, body, data = {}) {
       sound: 'default',
       title,
       body,
-      data
+      data,
+      channelId: "default", // <--- Ajoutez cette ligne
+      priority: "high"      // <--- Ajoutez cette ligne pour réveiller le téléphone
     });
     console.log(`✅ Notification envoyée à ${expoPushToken}`);
   } catch (error) {
