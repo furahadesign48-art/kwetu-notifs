@@ -2,63 +2,67 @@ const admin = require('firebase-admin');
 const axios = require('axios');
 const http = require('http');
 
-// Récupération sécurisée de la configuration
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+}
 
 const db = admin.firestore();
-console.log("🚀 Serveur de notifications Kwetu démarré...");
+console.log("🚀 Serveur Kwetu LIVE - Surveillance activée...");
 
-// Fonction d'envoi vers Expo
-// Remplacez la fonction sendPushNotification dans votre index.js sur GitHub :
 async function sendPushNotification(expoPushToken, title, body, data = {}) {
   if (!expoPushToken) return;
   try {
     await axios.post('https://exp.host/--/api/v2/push/send', {
       to: expoPushToken,
-      sound: 'default',
       title,
       body,
       data,
-      channelId: "default", // <--- Ajoutez cette ligne
-      priority: "high"      // <--- Ajoutez cette ligne pour réveiller le téléphone
+      channelId: "default",
+      priority: "high",
+      sound: "default"
     });
-    console.log(`✅ Notification envoyée à ${expoPushToken}`);
+    console.log(`✅ NOTIF ENVOYÉE à: ${expoPushToken}`);
   } catch (error) {
-    console.error("❌ Erreur Expo:", error.message);
+    console.error("❌ ERREUR EXPO:", error.response ? error.response.data : error.message);
   }
 }
 
-// SURVEILLANCE DES MESSAGES (Instantané)
+// SURVEILLANCE DES MESSAGES
 db.collection('messages').onSnapshot(snapshot => {
   snapshot.docChanges().forEach(async (change) => {
     if (change.type === 'added') {
       const msg = change.doc.data();
-      // On ne notifie que si le message n'est pas encore lu (read: false)
+      console.log(`📩 Nouveau message détecté de: ${msg.senderName}`);
+      
+      // On notifie seulement si non lu
       if (msg.read === false) {
         const recipientDoc = await db.collection('users').doc(msg.chatId).get();
         if (recipientDoc.exists) {
-          const userData = recipientDoc.data();
-          const token = userData.expoPushToken || userData.pushToken;
+          const token = recipientDoc.data().pushToken || recipientDoc.data().expoPushToken;
           if (token) {
-            sendPushNotification(
-              token,
-              `Message de ${msg.senderName}`,
-              msg.text,
-              { screen: 'Chat', params: { chatId: msg.senderId, chatName: msg.senderName } }
-            );
+            await sendPushNotification(token, `Message de ${msg.senderName}`, msg.text, { 
+              screen: 'Chat', 
+              params: { chatId: msg.senderId, chatName: msg.senderName } 
+            });
+          } else {
+            console.log(`⚠️ Aucun token trouvé pour l'utilisateur: ${msg.chatId}`);
           }
+        } else {
+          console.log(`❌ Utilisateur destinataire introuvable: ${msg.chatId}`);
         }
       }
     }
   });
+}, err => {
+  console.error("❌ ERREUR SNAPSHOT FIRESTORE:", err);
 });
 
-// Garder le serveur vivant (requis par Render)
+// Serveur HTTP pour Render
 http.createServer((req, res) => {
   res.writeHead(200);
-  res.end('Kwetu Notifications is Running');
+  res.end('Kwetu Server is running');
 }).listen(process.env.PORT || 3000);
