@@ -1,10 +1,9 @@
 const admin = require('firebase-admin');
 const axios = require('axios');
-const http = require('http');
 
 // Récupération des accès depuis les variables d'environnement Render
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-const expoAccessToken = process.env.EXPO_ACCESS_TOKEN; // Le jeton de sécurité Expo
+const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -15,8 +14,12 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 console.log("🚀 Serveur Kwetu LIVE - Surveillance avec sécurité activée...");
 
+// Fonction d'envoi robuste
 async function sendPushNotification(expoPushToken, title, body, data = {}) {
-  if (!expoPushToken) return;
+  if (!expoPushToken || !expoPushToken.startsWith('ExponentPushToken')) {
+    console.log(`⚠️ Token invalide ignoré: ${expoPushToken}`);
+    return;
+  }
   
   try {
     const response = await axios.post('https://exp.host/--/api/v2/push/send', 
@@ -31,59 +34,62 @@ async function sendPushNotification(expoPushToken, title, body, data = {}) {
       },
       {
         headers: {
-          'Authorization': `Bearer ${expoAccessToken}`, // On envoie le jeton de sécurité
+          'Authorization': `Bearer ${expoAccessToken}`,
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'Accept-encoding': 'gzip, deflate'
         }
       }
     );
-    
-    const result = response.data.data[0];
-    if (result.status === 'ok') {
-      console.log(`✅ NOTIF LIVRÉE avec succès à: ${expoPushToken}`);
+
+    // ✅ VÉRIFICATION SÉCURISÉE DE LA RÉPONSE
+    if (response.data && response.data.data && response.data.data[0]) {
+      const ticket = response.data.data[0];
+      if (ticket.status === 'ok') {
+        console.log(`✅ NOTIF ENVOYÉE à: ${expoPushToken}`);
+      } else {
+        console.error(`❌ Erreur Expo pour ${expoPushToken}: ${ticket.message}`);
+      }
     } else {
-      console.error(`❌ EXPO A REJETÉ LA LIVRAISON: ${result.message}`);
+      console.error("⚠️ Réponse Expo malformée :", response.data);
     }
+
   } catch (error) {
+    // Gestion propre des erreurs sans crasher
     const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
-    console.error("❌ ERREUR CRITIQUE EXPO:", errorMsg);
+    console.error(`❌ ERREUR CRITIQUE EXPO: ${errorMsg}`);
   }
 }
 
-// SURVEILLANCE DES MESSAGES (En temps réel)
+// Surveillance des messages (Exemple pour le chat)
 db.collection('messages').onSnapshot(snapshot => {
   snapshot.docChanges().forEach(async (change) => {
     if (change.type === 'added') {
       const msg = change.doc.data();
       
-      // On ne notifie que si le message est marqué non lu
-      if (msg.read === false) {
-        console.log(`📩 Nouveau message de: ${msg.senderName}`);
-        
-        const recipientDoc = await db.collection('users').doc(msg.chatId).get();
-        if (recipientDoc.exists) {
-          const userData = recipientDoc.data();
-          const token = userData.pushToken || userData.expoPushToken;
-          
+      // On évite les messages déjà traités (selon votre logique)
+      const now = new Date();
+      const msgTime = new Date(msg.createdAt);
+      if (now - msgTime > 30000) return; // Ignore les messages vieux de plus de 30s
+
+      console.log(`💬 Nouveau message détecté de: ${msg.senderName || 'Inconnu'}`);
+
+      // Logique pour trouver le destinataire et son token
+      // Ici, vous devez récupérer le token Firestore de l'utilisateur concerné
+      // Exemple simplifié :
+      if (msg.chatId) {
+        const userDoc = await db.collection('users').doc(msg.chatId).get();
+        if (userDoc.exists) {
+          const token = userDoc.data().expoPushToken || userDoc.data().pushToken;
           if (token) {
-            await sendPushNotification(token, `Message de ${msg.senderName}`, msg.text, { 
-              screen: 'Chat', 
-              params: { chatId: msg.senderId, chatName: msg.senderName } 
-            });
-          } else {
-            console.log(`⚠️ Aucun token pour l'utilisateur: ${msg.chatId}`);
+            await sendPushNotification(
+              token,
+              `Message de ${msg.senderName}`,
+              msg.text,
+              { screen: 'Chat', chatId: msg.senderId }
+            );
           }
         }
       }
     }
   });
-}, err => {
-  console.error("❌ ERREUR SNAPSHOT FIRESTORE:", err);
 });
-
-// Petit serveur pour Render
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('Kwetu Notifications Server is Running');
-}).listen(process.env.PORT || 3000);
