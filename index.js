@@ -1,7 +1,9 @@
 const admin = require('firebase-admin');
 const axios = require('axios');
+const http = require('http');
 
-// Récupération des accès depuis les variables d'environnement Render
+// 1. INITIALISATION FIREBASE
+// Assurez-vous que FIREBASE_SERVICE_ACCOUNT et EXPO_ACCESS_TOKEN sont dans vos variables d'env sur Render
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
 
@@ -14,7 +16,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 console.log("🚀 Serveur Kwetu LIVE - Surveillance avec sécurité activée...");
 
-// Fonction d'envoi robuste
+// 2. FONCTION D'ENVOI DE NOTIFICATION ROBUSTE
 async function sendPushNotification(expoPushToken, title, body, data = {}) {
   if (!expoPushToken || !expoPushToken.startsWith('ExponentPushToken')) {
     console.log(`⚠️ Token invalide ignoré: ${expoPushToken}`);
@@ -41,12 +43,14 @@ async function sendPushNotification(expoPushToken, title, body, data = {}) {
       }
     );
 
-    // ✅ VÉRIFICATION SÉCURISÉE DE LA RÉPONSE
-    if (response.data && response.data.data && response.data.data[0]) {
-      const ticket = response.data.data[0];
-      if (ticket.status === 'ok') {
-        console.log(`✅ NOTIF ENVOYÉE à: ${expoPushToken}`);
-      } else {
+    // ✅ VÉRIFICATION FLEXIBLE (Gère tableau ou objet direct d'Expo)
+    if (response.data && response.data.data) {
+      const expoData = response.data.data;
+      const ticket = Array.isArray(expoData) ? expoData[0] : expoData;
+
+      if (ticket && ticket.status === 'ok') {
+        console.log(`✅ NOTIF ENVOYÉE à: ${expoPushToken} (ID: ${ticket.id || 'N/A'})`);
+      } else if (ticket && ticket.status === 'error') {
         console.error(`❌ Erreur Expo pour ${expoPushToken}: ${ticket.message}`);
       }
     } else {
@@ -54,28 +58,25 @@ async function sendPushNotification(expoPushToken, title, body, data = {}) {
     }
 
   } catch (error) {
-    // Gestion propre des erreurs sans crasher
     const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
     console.error(`❌ ERREUR CRITIQUE EXPO: ${errorMsg}`);
   }
 }
 
-// Surveillance des messages (Exemple pour le chat)
+// 3. SURVEILLANCE DES MESSAGES (CHAT)
 db.collection('messages').onSnapshot(snapshot => {
   snapshot.docChanges().forEach(async (change) => {
     if (change.type === 'added') {
       const msg = change.doc.data();
       
-      // On évite les messages déjà traités (selon votre logique)
+      // Sécurité : Ne pas traiter les vieux messages au démarrage
       const now = new Date();
       const msgTime = new Date(msg.createdAt);
-      if (now - msgTime > 30000) return; // Ignore les messages vieux de plus de 30s
+      if (now - msgTime > 30000) return; 
 
       console.log(`💬 Nouveau message détecté de: ${msg.senderName || 'Inconnu'}`);
 
-      // Logique pour trouver le destinataire et son token
-      // Ici, vous devez récupérer le token Firestore de l'utilisateur concerné
-      // Exemple simplifié :
+      // Récupération du token du destinataire
       if (msg.chatId) {
         const userDoc = await db.collection('users').doc(msg.chatId).get();
         if (userDoc.exists) {
@@ -92,4 +93,13 @@ db.collection('messages').onSnapshot(snapshot => {
       }
     }
   });
+});
+
+// 4. MINI SERVEUR HTTP (Pour éviter l'erreur de port sur Render)
+const port = process.env.PORT || 10000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Serveur de notifications Kwetu actif\n');
+}).listen(port, () => {
+  console.log(`🌍 Monitoring HTTP actif sur le port ${port}`);
 });
